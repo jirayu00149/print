@@ -1,5 +1,7 @@
 # Wi-Fi Printer Bridge
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/jirayu00149/print)
+
 หน้าเว็บเล็ก ๆ สำหรับส่งงานพิมพ์ผ่าน Wi-Fi ไปที่ `192.168.10.1:9100` หรือ IP/พอร์ตอื่นที่กำหนดได้
 
 ## เริ่มใช้งาน
