@@ -2,6 +2,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
+const os = require('os');
+const { execFile, spawn } = require('child_process');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -23,7 +25,8 @@ const DEFAULTS = {
   host: process.env.PRINTER_HOST || '192.168.10.1',
   port: Number(process.env.PRINTER_PORT || 9100),
   timeoutMs: Number(process.env.PRINTER_TIMEOUT_MS || 3000),
-  mode: 'escpos'
+  mode: process.env.PRINTER_MODE || 'escpos',
+  systemPrinter: process.env.SYSTEM_PRINTER || 'EPSON L3110 Series'
 };
 
 function readJson(file, fallback) {
@@ -35,16 +38,27 @@ function readJson(file, fallback) {
 }
 
 const webSettings = readJson(WEB_SETTINGS_FILE, {});
+const envSettings = Object.fromEntries(Object.entries({
+  host: process.env.PRINTER_HOST,
+  port: process.env.PRINTER_PORT ? Number(process.env.PRINTER_PORT) : undefined,
+  timeoutMs: process.env.PRINTER_TIMEOUT_MS ? Number(process.env.PRINTER_TIMEOUT_MS) : undefined,
+  mode: process.env.PRINTER_MODE,
+  systemPrinter: process.env.SYSTEM_PRINTER
+}).filter(([, value]) => value !== undefined && value !== ''));
 let printerSettings = {
   ...DEFAULTS,
-  ...readJson(PRINTER_SETTINGS_FILE, {})
+  ...readJson(PRINTER_SETTINGS_FILE, {}),
+  ...envSettings
 };
 
 function normalizeSettings(input = {}) {
   const host = String(input.host || printerSettings.host || DEFAULTS.host).trim();
   const port = Number(input.port || printerSettings.port || DEFAULTS.port);
   const timeoutMs = Number(input.timeoutMs || printerSettings.timeoutMs || DEFAULTS.timeoutMs);
-  const mode = input.mode === 'raw' ? 'raw' : 'escpos';
+  const allowedModes = new Set(['escpos', 'raw', 'system']);
+  const requestedMode = String(input.mode || printerSettings.mode || DEFAULTS.mode || 'escpos');
+  const mode = allowedModes.has(requestedMode) ? requestedMode : 'escpos';
+  const systemPrinter = String(input.systemPrinter || printerSettings.systemPrinter || DEFAULTS.systemPrinter || '').trim();
 
   if (!host) {
     throw httpError(400, 'กรุณาระบุ IP เครื่องพิมพ์');
@@ -58,7 +72,7 @@ function normalizeSettings(input = {}) {
     throw httpError(400, 'timeout ต้องอยู่ระหว่าง 500-30000 ms');
   }
 
-  return { host, port, timeoutMs, mode };
+  return { host, port, timeoutMs, mode, systemPrinter };
 }
 
 function httpError(status, message) {
@@ -151,6 +165,184 @@ function writeToPrinter(settings, payload) {
   });
 }
 
+function runProcess(command, args, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      windowsHide: true,
+      stdio: 'ignore'
+    });
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      child.kill();
+      resolve({ timedOut: true });
+    }, timeoutMs);
+
+    child.once('error', (error) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.once('close', (code) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timer);
+      if (code && code !== 0) {
+        reject(new Error(`${command} exited with code ${code}`));
+        return;
+      }
+
+      resolve({ timedOut: false });
+    });
+  });
+}
+
+function powershellString(value) {
+  return `'${String(value || '').replace(/'/g, "''")}'`;
+}
+
+function execPowerShell(script, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      {
+        timeout: timeoutMs,
+        windowsHide: true
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error((stderr || error.message).trim()));
+          return;
+        }
+
+        resolve(stdout.trim());
+      }
+    );
+  });
+}
+
+function tempPrintPath(fileName) {
+  const ext = path.extname(fileName || '') || '.txt';
+  const safeExt = /^[a-z0-9.]+$/i.test(ext) ? ext : '.txt';
+  return path.join(os.tmpdir(), `printwifi-${Date.now()}-${Math.random().toString(16).slice(2)}${safeExt}`);
+}
+
+function cleanupFile(filePath) {
+  setTimeout(() => {
+    fs.unlink(filePath, () => {});
+  }, 30000).unref();
+}
+
+function isTextPrintFile(fileName) {
+  return ['.txt', '.csv', '.json', '.log', '.html', '.htm', '.xml', '.md', '.js', '.css', '.yaml', '.yml']
+    .includes(path.extname(fileName || '').toLowerCase());
+}
+
+async function systemPrinterInfo(settings) {
+  if (process.platform !== 'win32') {
+    return {
+      printerName: settings.systemPrinter || 'system default',
+      platform: process.platform
+    };
+  }
+
+  const script = `
+$name = ${powershellString(settings.systemPrinter || '')}
+if ($name) {
+  Get-Printer -Name $name -ErrorAction Stop | Select-Object Name,DriverName,PortName,PrinterStatus | ConvertTo-Json -Compress
+} else {
+  Get-CimInstance Win32_Printer | Where-Object { $_.Default -eq $true } | Select-Object Name,DriverName,PortName | ConvertTo-Json -Compress
+}
+`;
+  const output = await execPowerShell(script, settings.timeoutMs);
+  return output ? JSON.parse(output) : { printerName: settings.systemPrinter || 'system default' };
+}
+
+async function listSystemPrinters() {
+  if (process.platform !== 'win32') {
+    return [];
+  }
+
+  const script = `
+Get-Printer | Select-Object Name,DriverName,PortName,PrinterStatus | ConvertTo-Json -Compress
+`;
+  const output = await execPowerShell(script, 10000);
+  if (!output) {
+    return [];
+  }
+
+  const printers = JSON.parse(output);
+  return Array.isArray(printers) ? printers : [printers];
+}
+
+async function printWithSystemPrinter(settings, file) {
+  if (process.platform !== 'win32') {
+    throw httpError(501, 'โหมด USB/System ตอนนี้รองรับบน Windows เท่านั้น');
+  }
+
+  const fileName = file.fileName || 'printwifi.txt';
+  const filePath = tempPrintPath(fileName);
+  const payload = Buffer.isBuffer(file.payload)
+    ? file.payload
+    : Buffer.from(String(file.payload || ''), 'utf8');
+
+  if (!payload.length) {
+    throw httpError(400, 'ไม่มีข้อมูลสำหรับพิมพ์');
+  }
+
+  fs.writeFileSync(filePath, payload);
+  cleanupFile(filePath);
+
+  const startedAt = Date.now();
+  const timeoutMs = Math.max(settings.timeoutMs, 10000);
+
+  if (isTextPrintFile(fileName)) {
+    const args = settings.systemPrinter
+      ? ['/pt', filePath, settings.systemPrinter]
+      : ['/p', filePath];
+    await runProcess('notepad.exe', args, timeoutMs);
+  } else {
+    const script = `
+$file = ${powershellString(filePath)}
+$process = Start-Process -FilePath $file -Verb Print -PassThru
+if ($process) {
+  Wait-Process -Id $process.Id -Timeout 20 -ErrorAction SilentlyContinue
+}
+`;
+    await execPowerShell(script, timeoutMs + 5000);
+  }
+
+  return {
+    bytes: payload.length,
+    elapsedMs: Date.now() - startedAt,
+    printerName: settings.systemPrinter || 'Windows default printer'
+  };
+}
+
+function dispatchPrint(settings, payload, fileName = 'printwifi.txt') {
+  if (settings.mode === 'system') {
+    return printWithSystemPrinter(settings, {
+      fileName,
+      payload
+    });
+  }
+
+  return writeToPrinter(settings, payload);
+}
+
 function escposPayload({ text, align = 'left', feedLines = 4, cut = true }) {
   const safeText = String(text || '').replace(/\r?\n/g, '\n');
   const alignment = {
@@ -196,6 +388,28 @@ function rawFilePayload({ data, fileName = 'file' }) {
   };
 }
 
+function systemFilePayload(body) {
+  if (body.dataEncoding === 'base64') {
+    return rawFilePayload(body);
+  }
+
+  const fileName = path.basename(String(body.fileName || 'printwifi.txt'));
+  const text = String(body.text || body.data || '').trimEnd();
+
+  if (!text) {
+    throw httpError(400, 'ไฟล์ว่างหรือไม่มีข้อความสำหรับพิมพ์');
+  }
+
+  if (Buffer.byteLength(text, 'utf8') > MAX_PRINT_FILE_BYTES) {
+    throw httpError(413, `ไฟล์ใหญ่เกินไป จำกัด ${Math.round(MAX_PRINT_FILE_BYTES / 1024)} KB`);
+  }
+
+  return {
+    fileName,
+    payload: Buffer.from(`${text}\r\n`, 'utf8')
+  };
+}
+
 function textFilePayload(body, settings) {
   const fileName = path.basename(String(body.fileName || 'file.txt'));
   const ext = path.extname(fileName).toLowerCase();
@@ -226,24 +440,30 @@ function textFilePayload(body, settings) {
   };
 }
 
-function testPayload(settings) {
+function testText(settings) {
   const now = new Date().toLocaleString('th-TH', {
     timeZone: 'Asia/Bangkok',
     hour12: false
   });
 
-  const text = [
+  return [
     'Wi-Fi Printer Test',
     '--------------------',
-    `IP: ${settings.host}`,
-    `Port: ${settings.port}`,
+    settings.mode === 'system'
+      ? `Printer: ${settings.systemPrinter || 'Windows default printer'}`
+      : `IP: ${settings.host}`,
+    settings.mode === 'system'
+      ? 'Mode: USB/System'
+      : `Port: ${settings.port}`,
     `Time: ${now}`,
     '',
     'Connection OK'
   ].join('\n');
+}
 
+function testPayload(settings) {
   return escposPayload({
-    text,
+    text: testText(settings),
     align: 'center',
     feedLines: 4,
     cut: true
@@ -349,6 +569,15 @@ async function routeApi(req, res) {
     return;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/printers') {
+    const printers = await listSystemPrinters();
+    sendJson(res, 200, {
+      ok: true,
+      printers
+    });
+    return;
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/config') {
     const body = await readBody(req);
     const config = savePrinterSettings(body);
@@ -359,6 +588,16 @@ async function routeApi(req, res) {
   if (req.method === 'POST' && url.pathname === '/api/printer/check') {
     const body = await readBody(req);
     const settings = normalizeSettings({ ...printerSettings, ...body });
+    if (settings.mode === 'system') {
+      const printer = await systemPrinterInfo(settings);
+      sendJson(res, 200, {
+        ok: true,
+        message: `พร้อมพิมพ์ผ่าน Windows driver: ${settings.systemPrinter || 'default printer'}`,
+        printer
+      });
+      return;
+    }
+
     const result = await connectPrinter(settings);
     sendJson(res, 200, {
       ok: true,
@@ -371,7 +610,10 @@ async function routeApi(req, res) {
   if (req.method === 'POST' && url.pathname === '/api/printer/print-test') {
     const body = await readBody(req);
     const settings = normalizeSettings({ ...printerSettings, ...body });
-    const result = await writeToPrinter(settings, testPayload(settings));
+    const payload = settings.mode === 'system'
+      ? Buffer.from(`${testText(settings)}\r\n`, 'utf8')
+      : testPayload(settings);
+    const result = await dispatchPrint(settings, payload, 'printwifi-test.txt');
     sendJson(res, 200, {
       ok: true,
       message: 'ส่งหน้าทดสอบแล้ว',
@@ -389,10 +631,12 @@ async function routeApi(req, res) {
       throw httpError(400, 'กรุณาใส่ข้อความที่จะพิมพ์');
     }
 
-    const payload = settings.mode === 'raw'
+    const payload = settings.mode === 'system'
+      ? Buffer.from(`${text}\r\n`, 'utf8')
+      : settings.mode === 'raw'
       ? rawPayload(body)
       : escposPayload(body);
-    const result = await writeToPrinter(settings, payload);
+    const result = await dispatchPrint(settings, payload, 'printwifi-job.txt');
 
     sendJson(res, 200, {
       ok: true,
@@ -405,10 +649,12 @@ async function routeApi(req, res) {
   if (req.method === 'POST' && url.pathname === '/api/printer/print-file') {
     const body = await readBody(req);
     const settings = normalizeSettings({ ...printerSettings, ...body });
-    const file = body.dataEncoding === 'base64'
-      ? rawFilePayload(body)
-      : textFilePayload(body, settings);
-    const result = await writeToPrinter(settings, file.payload);
+    const file = settings.mode === 'system'
+      ? systemFilePayload(body)
+      : body.dataEncoding === 'base64'
+        ? rawFilePayload(body)
+        : textFilePayload(body, settings);
+    const result = await dispatchPrint(settings, file.payload, file.fileName);
 
     sendJson(res, 200, {
       ok: true,

@@ -5,6 +5,7 @@ const fields = {
   port: $('#port'),
   timeoutMs: $('#timeoutMs'),
   mode: $('#mode'),
+  systemPrinter: $('#systemPrinter'),
   align: $('#align'),
   cut: $('#cut'),
   feedLines: $('#feedLines'),
@@ -26,6 +27,7 @@ const targetLabel = $('#targetLabel');
 const statusPill = $('#statusPill');
 const log = $('#log');
 const fileStatus = $('#fileStatus');
+const printerList = $('#printerList');
 const API_BASE = getApiBase();
 const MAX_PRINT_FILE_BYTES = 1024 * 1024;
 const TEXT_FILE_EXTENSIONS = new Set([
@@ -84,7 +86,8 @@ function settings() {
     host: fields.host.value.trim(),
     port: Number(fields.port.value),
     timeoutMs: Number(fields.timeoutMs.value),
-    mode: fields.mode.value
+    mode: fields.mode.value,
+    systemPrinter: fields.systemPrinter.value.trim()
   };
 }
 
@@ -109,8 +112,10 @@ function setStatus(state, text) {
 }
 
 function syncTargetLabel() {
-  const { host, port } = settings();
-  targetLabel.textContent = `${host || '-'}:${port || '-'}`;
+  const { host, port, mode, systemPrinter } = settings();
+  targetLabel.textContent = mode === 'system'
+    ? (systemPrinter || 'Windows default printer')
+    : `${host || '-'}:${port || '-'}`;
 }
 
 function addLog(type, message, details = '') {
@@ -173,7 +178,7 @@ function validateFile(file) {
     throw new Error(`ไฟล์ใหญ่เกินไป จำกัด ${formatBytes(MAX_PRINT_FILE_BYTES)}`);
   }
 
-  if (UNSUPPORTED_FILE_EXTENSIONS.has(fileExt(file.name))) {
+  if (UNSUPPORTED_FILE_EXTENSIONS.has(fileExt(file.name)) && fields.mode.value !== 'system') {
     throw new Error('ไฟล์ PDF/รูปภาพยังพิมพ์ผ่าน RAW TCP โดยตรงไม่ได้');
   }
 }
@@ -186,8 +191,22 @@ function updateFileStatus() {
     return;
   }
 
-  const mode = isRawFile(file) ? 'raw' : isTextFile(file) ? 'text' : 'unsupported';
+  const mode = fields.mode.value === 'system'
+    ? 'system'
+    : isRawFile(file)
+      ? 'raw'
+      : isTextFile(file)
+        ? 'text'
+        : 'unsupported';
   fileStatus.textContent = `${file.name} · ${formatBytes(file.size)} · ${mode}`;
+}
+
+function updateModeUi() {
+  const systemMode = fields.mode.value === 'system';
+  fields.host.disabled = systemMode;
+  fields.port.disabled = systemMode;
+  document.body.dataset.printMode = systemMode ? 'system' : 'network';
+  updateFileStatus();
 }
 
 function arrayBufferToBase64(buffer) {
@@ -225,9 +244,25 @@ async function loadConfig() {
     fields.port.value = config.port;
     fields.timeoutMs.value = config.timeoutMs;
     fields.mode.value = config.mode;
+    fields.systemPrinter.value = config.systemPrinter || 'EPSON L3110 Series';
+    updateModeUi();
     syncTargetLabel();
   } catch (error) {
     addLog('error', 'โหลดค่าตั้งต้นไม่สำเร็จ', error.message);
+  }
+}
+
+async function loadPrinters() {
+  try {
+    const { printers } = await api('/api/printers');
+    printerList.replaceChildren(...printers.filter((printer) => printer.Name || printer.name).map((printer) => {
+      const option = document.createElement('option');
+      option.value = printer.Name || printer.name;
+      option.label = printer.DriverName || printer.driverName || '';
+      return option;
+    }));
+  } catch {
+    // Render/Linux cannot list Windows printers; manual entry still works on the local bridge.
   }
 }
 
@@ -240,6 +275,8 @@ buttons.save.addEventListener('click', async () => {
     fields.port.value = config.port;
     fields.timeoutMs.value = config.timeoutMs;
     fields.mode.value = config.mode;
+    fields.systemPrinter.value = config.systemPrinter || 'EPSON L3110 Series';
+    updateModeUi();
     syncTargetLabel();
     addLog('ok', 'บันทึกค่าแล้ว', `${config.host}:${config.port}`);
   } catch (error) {
@@ -335,7 +372,7 @@ buttons.printFile.addEventListener('click', async () => {
       feedLines: Number(fields.feedLines.value)
     };
 
-    if (isRawFile(file)) {
+    if (isRawFile(file) || (fields.mode.value === 'system' && !isTextFile(file))) {
       body.dataEncoding = 'base64';
       body.data = arrayBufferToBase64(await file.arrayBuffer());
     } else if (isTextFile(file)) {
@@ -361,6 +398,8 @@ buttons.clearLog.addEventListener('click', () => {
 });
 
 fields.fileInput.addEventListener('change', updateFileStatus);
+fields.mode.addEventListener('change', updateModeUi);
+fields.systemPrinter.addEventListener('input', syncTargetLabel);
 
 Object.values(fields).forEach((field) => {
   field.addEventListener('input', syncTargetLabel);
@@ -368,4 +407,6 @@ Object.values(fields).forEach((field) => {
 });
 
 loadConfig();
+loadPrinters();
+updateModeUi();
 updateFileStatus();

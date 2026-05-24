@@ -18,3 +18,7 @@ services:
         value: 9100
       - key: PRINTER_TIMEOUT_MS
         value: 3000
+      - key: PRINTER_MODE
+        value: escpos
+      - key: SYSTEM_PRINTER
+        value: EPSON L3110 Series

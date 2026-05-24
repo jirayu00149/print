@@ -184,6 +184,10 @@ h2 {
   gap: 12px;
 }
 
+.system-field {
+  grid-column: 1 / -1;
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -214,6 +218,12 @@ select:focus,
 textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(0, 122, 90, 0.14);
+}
+
+input:disabled {
+  color: #7a8580;
+  background: #f2f5f3;
+  cursor: not-allowed;
 }
 
 .toolbar,

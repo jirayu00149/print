@@ -47,7 +47,13 @@
             <select id="mode" name="mode">
               <option value="escpos">ESC/POS</option>
               <option value="raw">RAW</option>
+              <option value="system">USB/System</option>
             </select>
+          </label>
+          <label class="system-field">
+            USB Printer
+            <input id="systemPrinter" name="systemPrinter" autocomplete="off" list="printerList" value="EPSON L3110 Series">
+            <datalist id="printerList"></datalist>
           </label>
         </form>
 
@@ -93,7 +99,7 @@ IP: 192.168.10.1
         <div class="file-tools">
           <label class="file-picker">
             <span>ไฟล์</span>
-            <input id="fileInput" type="file" accept=".txt,.csv,.json,.log,.html,.htm,.xml,.md,.js,.css,.yaml,.yml,.prn,.bin,.raw,.escpos,text/*,application/json">
+            <input id="fileInput" type="file" accept=".txt,.csv,.json,.log,.html,.htm,.xml,.md,.js,.css,.yaml,.yml,.prn,.bin,.raw,.escpos,.pdf,.png,.jpg,.jpeg,.gif,.webp,.bmp,text/*,application/json,image/*,application/pdf">
           </label>
           <p id="fileStatus">ยังไม่ได้เลือกไฟล์</p>
           <div class="file-actions">
