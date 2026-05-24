@@ -1,0 +1,19 @@
+{
+  "name": "printwifi",
+  "version": "1.0.0",
+  "description": "Wi-Fi printer bridge for RAW and ESC/POS printers.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "wifi",
+    "printer",
+    "escpos",
+    "raw"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
