@@ -22,6 +22,24 @@ const buttons = {
 const targetLabel = $('#targetLabel');
 const statusPill = $('#statusPill');
 const log = $('#log');
+const API_BASE = getApiBase();
+
+function getApiBase() {
+  const params = new URLSearchParams(window.location.search);
+  const apiFromUrl = params.get('api');
+
+  if (apiFromUrl) {
+    localStorage.setItem('printwifiApiBase', apiFromUrl.replace(/\/$/, ''));
+  }
+
+  const localHosts = new Set(['localhost', '127.0.0.1', '::1']);
+
+  if (localHosts.has(window.location.hostname)) {
+    return '';
+  }
+
+  return localStorage.getItem('printwifiApiBase') || 'http://localhost:8080';
+}
 
 function settings() {
   return {
@@ -66,7 +84,7 @@ function addLog(type, message, details = '') {
 }
 
 async function api(path, payload) {
-  const response = await fetch(path, {
+  const response = await fetch(`${API_BASE}${path}`, {
     method: payload ? 'POST' : 'GET',
     headers: payload ? { 'Content-Type': 'application/json' } : undefined,
     body: payload ? JSON.stringify(payload) : undefined

@@ -207,9 +207,19 @@ function sendJson(res, status, data) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
+    ...corsHeaders(),
     'Content-Length': Buffer.byteLength(body)
   });
   res.end(body);
+}
+
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Private-Network': 'true'
+  };
 }
 
 function readBody(req) {
@@ -333,6 +343,12 @@ async function routeApi(req, res) {
 
 const server = http.createServer(async (req, res) => {
   try {
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, corsHeaders());
+      res.end();
+      return;
+    }
+
     if (req.url.startsWith('/api/')) {
       await routeApi(req, res);
       return;
