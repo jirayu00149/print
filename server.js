@@ -7,6 +7,17 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const WEB_SETTINGS_FILE = path.join(ROOT, 'webServerApiSettings.json');
 const PRINTER_SETTINGS_FILE = path.join(ROOT, 'printer-settings.json');
+const MAX_JSON_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_PRINT_FILE_BYTES = 1024 * 1024;
+const UNSUPPORTED_FILE_EXTENSIONS = new Set([
+  '.pdf',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.bmp'
+]);
 
 const DEFAULTS = {
   host: process.env.PRINTER_HOST || '192.168.10.1',
@@ -168,6 +179,53 @@ function rawPayload({ text, feedLines = 2 }) {
   return Buffer.from(`${safeText}${'\r\n'.repeat(Math.max(0, Math.min(8, Number(feedLines) || 0)))}`, 'utf8');
 }
 
+function rawFilePayload({ data, fileName = 'file' }) {
+  const payload = Buffer.from(String(data || ''), 'base64');
+
+  if (!payload.length) {
+    throw httpError(400, 'ไฟล์ว่างหรืออ่านข้อมูลไม่ได้');
+  }
+
+  if (payload.length > MAX_PRINT_FILE_BYTES) {
+    throw httpError(413, `ไฟล์ใหญ่เกินไป จำกัด ${Math.round(MAX_PRINT_FILE_BYTES / 1024)} KB`);
+  }
+
+  return {
+    fileName: path.basename(String(fileName || 'file')),
+    payload
+  };
+}
+
+function textFilePayload(body, settings) {
+  const fileName = path.basename(String(body.fileName || 'file.txt'));
+  const ext = path.extname(fileName).toLowerCase();
+  const text = String(body.text || body.data || '').trimEnd();
+
+  if (UNSUPPORTED_FILE_EXTENSIONS.has(ext)) {
+    throw httpError(415, 'ไฟล์ PDF/รูปภาพยังพิมพ์ผ่าน RAW TCP โดยตรงไม่ได้ กรุณาใช้ไฟล์ข้อความหรือไฟล์คำสั่งเครื่องพิมพ์');
+  }
+
+  if (!text) {
+    throw httpError(400, 'ไฟล์ว่างหรือไม่มีข้อความสำหรับพิมพ์');
+  }
+
+  if (Buffer.byteLength(text, 'utf8') > MAX_PRINT_FILE_BYTES) {
+    throw httpError(413, `ไฟล์ใหญ่เกินไป จำกัด ${Math.round(MAX_PRINT_FILE_BYTES / 1024)} KB`);
+  }
+
+  return {
+    fileName,
+    payload: settings.mode === 'raw'
+      ? rawPayload({ text, feedLines: body.feedLines })
+      : escposPayload({
+        text,
+        align: body.align,
+        feedLines: body.feedLines,
+        cut: body.cut
+      })
+  };
+}
+
 function testPayload(settings) {
   const now = new Date().toLocaleString('th-TH', {
     timeZone: 'Asia/Bangkok',
@@ -229,7 +287,7 @@ function readBody(req) {
     req.setEncoding('utf8');
     req.on('data', (chunk) => {
       body += chunk;
-      if (body.length > 1024 * 1024) {
+      if (body.length > MAX_JSON_BODY_BYTES) {
         reject(httpError(413, 'ข้อมูลใหญ่เกินไป'));
         req.destroy();
       }
@@ -273,6 +331,15 @@ function serveStatic(req, res) {
 
 async function routeApi(req, res) {
   const url = new URL(req.url, 'http://localhost');
+
+  if (req.method === 'GET' && url.pathname === '/api/health') {
+    sendJson(res, 200, {
+      ok: true,
+      service: 'printwifi',
+      printer: `${printerSettings.host}:${printerSettings.port}`
+    });
+    return;
+  }
 
   if (req.method === 'GET' && url.pathname === '/api/config') {
     sendJson(res, 200, {
@@ -330,6 +397,23 @@ async function routeApi(req, res) {
     sendJson(res, 200, {
       ok: true,
       message: 'ส่งงานพิมพ์แล้ว',
+      ...result
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/printer/print-file') {
+    const body = await readBody(req);
+    const settings = normalizeSettings({ ...printerSettings, ...body });
+    const file = body.dataEncoding === 'base64'
+      ? rawFilePayload(body)
+      : textFilePayload(body, settings);
+    const result = await writeToPrinter(settings, file.payload);
+
+    sendJson(res, 200, {
+      ok: true,
+      message: `ส่งไฟล์ ${file.fileName} แล้ว`,
+      fileName: file.fileName,
       ...result
     });
     return;

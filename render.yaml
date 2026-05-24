@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: printwifi
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: PRINTER_HOST
+        value: 192.168.10.1
+      - key: PRINTER_PORT
+        value: 9100
+      - key: PRINTER_TIMEOUT_MS
+        value: 3000

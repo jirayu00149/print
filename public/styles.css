@@ -289,6 +289,42 @@ textarea {
   font-size: 15px;
 }
 
+.file-tools {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.file-picker {
+  min-width: 0;
+}
+
+input[type="file"] {
+  padding: 8px;
+  line-height: 1.3;
+}
+
+#fileStatus {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.file-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.file-actions button {
+  min-width: 118px;
+}
+
 .print-actions {
   justify-content: space-between;
 }
@@ -410,6 +446,18 @@ li[data-type="error"] {
     min-height: 300px;
   }
 
+  .file-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .file-actions {
+    width: 100%;
+  }
+
+  .file-actions button {
+    flex: 1 1 50%;
+  }
+
   li {
     grid-template-columns: 72px 1fr;
   }
@@ -431,10 +479,15 @@ li[data-type="error"] {
   }
 
   .toolbar button,
+  .file-actions button,
   .print-actions button,
   .print-actions label {
     width: 100%;
     flex: 1 1 100%;
+  }
+
+  .file-actions {
+    flex-wrap: wrap;
   }
 
   h1 {
