@@ -34,8 +34,14 @@ npm start
 
 ถ้าเปิดหน้าเว็บจาก Cloudflare บนเครื่องเดียวกัน ระบบจะเรียก API ที่ `http://localhost:8080` อัตโนมัติ
 
-ถ้า local bridge อยู่เครื่องอื่น ให้เปิดด้วย query string:
+ถ้า local bridge อยู่เครื่องอื่น หน้า Cloudflare อาจถูกเบราว์เซอร์บล็อกเวลาเรียก `http://IP-เครื่องอื่น:8080` จากหน้า HTTPS ให้เปิดหน้า local bridge โดยตรงแทน:
 
 ```text
-https://your-cloudflare-url/?api=http://IP-เครื่องที่รัน-bridge:8080
+http://IP-เครื่องที่รัน-bridge:8080
+```
+
+หรือทำให้ local bridge มี HTTPS/Cloudflare Tunnel ก่อน แล้วค่อยใช้ query string:
+
+```text
+https://your-cloudflare-url/?api=https://URL-bridge
 ```
